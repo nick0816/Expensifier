@@ -1,0 +1,51 @@
+name: Build macOS (AU / VST3 / AAX)
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build-mac:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get JUCE 8.0.4
+        run: git clone --depth 1 --branch 8.0.4 https://github.com/juce-framework/JUCE.git JUCE
+
+      - name: Configure (universal: Apple Silicon + Intel)
+        run: >
+          cmake -S . -B build -G Xcode
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
+
+      - name: Build
+        run: cmake --build build --config Release -- -quiet
+
+      - name: Ad-hoc sign
+        run: |
+          cd build/SimonsExpensifier_artefacts/Release
+          for p in "AU/Simons Expensifier.component" "VST3/Simons Expensifier.vst3" "AAX/Simons Expensifier.aaxplugin" "Standalone/Simons Expensifier.app"; do
+            [ -e "$p" ] && codesign --force --deep --sign - "$p"
+          done
+
+      - name: Validate the Audio Unit (same check Logic runs)
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R "build/SimonsExpensifier_artefacts/Release/AU/Simons Expensifier.component" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          sleep 2
+          auval -v aufx Dlr3 Rich
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cd build/SimonsExpensifier_artefacts/Release
+          ditto -c -k --keepParent "AU/Simons Expensifier.component" "$GITHUB_WORKSPACE/dist/SimonsExpensifier-AU-Logic.zip"
+          ditto -c -k --keepParent "VST3/Simons Expensifier.vst3"   "$GITHUB_WORKSPACE/dist/SimonsExpensifier-VST3-mac.zip"
+          ditto -c -k --keepParent "AAX/Simons Expensifier.aaxplugin" "$GITHUB_WORKSPACE/dist/SimonsExpensifier-AAX-mac-unsigned.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SimonsExpensifier-macOS
+          path: dist/*.zip
